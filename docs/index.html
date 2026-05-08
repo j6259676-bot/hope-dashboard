@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Hope 線上分部 Dashboard</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg:       #0f0f1a;
+    --surface:  #1a1a2e;
+    --card:     #22223a;
+    --gold:     #c9a84c;
+    --gold-dim: #8a6e2f;
+    --text:     #e8e8f0;
+    --muted:    #8888aa;
+    --danger:   #e05c5c;
+    --success:  #5cb87e;
+    --border:   rgba(201,168,76,.18);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, 'Segoe UI', sans-serif; min-height: 100vh; }
+
+  /* Login */
+  #login-overlay {
+    position: fixed; inset: 0; background: var(--bg);
+    display: flex; align-items: center; justify-content: center; z-index: 9999;
+  }
+  .login-box {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 16px; padding: 40px; width: min(420px, 92vw); text-align: center;
+  }
+  .login-box h1 { color: var(--gold); font-size: 1.4rem; margin-bottom: 6px; }
+  .login-box p  { color: var(--muted); font-size: .85rem; margin-bottom: 28px; }
+  .login-box label { display: block; text-align: left; font-size: .8rem; color: var(--muted); margin-bottom: 4px; }
+  .login-box input {
+    width: 100%; padding: 10px 14px; background: var(--card);
+    border: 1px solid var(--border); border-radius: 8px; color: var(--text);
+    font-size: .95rem; margin-bottom: 16px; outline: none;
+  }
+  .login-box input:focus { border-color: var(--gold); }
+  .btn-primary {
+    width: 100%; padding: 12px; background: var(--gold); color: #0f0f1a;
+    font-weight: 700; border: none; border-radius: 8px; cursor: pointer; font-size: 1rem;
+    transition: opacity .2s;
+  }
+  .btn-primary:hover { opacity: .85; }
+  #login-error { color: var(--danger); font-size: .82rem; margin-top: 10px; display: none; }
+
+  /* Layout */
+  #app { display: none; flex-direction: column; min-height: 100vh; }
+  header {
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    padding: 0 24px; height: 56px; display: flex; align-items: center; justify-content: space-between;
+    position: sticky; top: 0; z-index: 100;
+  }
+  header .brand { color: var(--gold); font-weight: 700; font-size: 1.05rem; letter-spacing: .02em; }
+  header .brand span { color: var(--muted); font-weight: 400; font-size: .82rem; margin-left: 8px; }
+  .btn-logout {
+    background: transparent; border: 1px solid var(--border); color: var(--muted);
+    padding: 5px 14px; border-radius: 6px; cursor: pointer; font-size: .8rem; transition: all .2s;
+  }
+  .btn-logout:hover { border-color: var(--gold); color: var(--gold); }
+  main { padding: 24px; max-width: 1400px; margin: 0 auto; width: 100%; flex: 1; }
+
+  /* Section */
+  .section-title {
+    font-size: 1rem; font-weight: 700; color: var(--gold);
+    margin-bottom: 16px; padding-bottom: 8px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+  }
+  section { margin-bottom: 36px; }
+
+  /* Cards */
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3,1fr); gap: 16px; }
+  @media(max-width:768px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+
+  /* Map */
+  #map { height: 360px; border-radius: 10px; border: 1px solid var(--border); margin-bottom: 16px; }
+  .leaflet-container { background: #16162a !important; }
+
+  /* Stats */
+  .stat-pill { text-align: center; padding: 20px 10px; }
+  .stat-pill .num   { font-size: 2rem; font-weight: 800; color: var(--gold); }
+  .stat-pill .label { font-size: .78rem; color: var(--muted); margin-top: 4px; }
+
+  /* Rank list */
+  .rank-list { list-style: none; }
+  .rank-list li {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 0; border-bottom: 1px solid var(--border); font-size: .88rem;
+  }
+  .rank-list li:last-child { border-bottom: none; }
+  .rank-list .rn  { color: var(--gold); font-weight: 700; width: 22px; text-align: right; flex-shrink: 0; }
+  .rank-list .nm  { flex: 1; }
+  .rank-list .ct  { color: var(--muted); font-size: .8rem; white-space: nowrap; }
+  .rank-list .bw  { width: 80px; background: var(--surface); border-radius: 4px; height: 6px; flex-shrink: 0; }
+  .rank-list .bf  { height: 6px; border-radius: 4px; background: var(--gold-dim); }
+
+  /* Badges */
+  .alert-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: rgba(224,92,92,.15); color: var(--danger);
+    border: 1px solid rgba(224,92,92,.4); border-radius: 20px;
+    padding: 4px 12px; font-size: .8rem; font-weight: 600;
+  }
+  .ok-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: rgba(92,184,126,.12); color: var(--success);
+    border: 1px solid rgba(92,184,126,.3); border-radius: 20px;
+    padding: 4px 12px; font-size: .8rem; font-weight: 600;
+  }
+
+  /* Charts */
+  .chart-wrap { position: relative; height: 220px; }
+  .card-title { font-size: .88rem; font-weight: 600; color: var(--muted); margin-bottom: 14px; }
+
+  /* YouTube table */
+  .yt-scroll { overflow-x: auto; }
+  .yt-table { width: 100%; border-collapse: collapse; font-size: .83rem; }
+  .yt-table th {
+    text-align: left; padding: 8px 10px; color: var(--muted);
+    border-bottom: 1px solid var(--border); font-weight: 600; white-space: nowrap;
+  }
+  .yt-table td { padding: 9px 10px; border-bottom: 1px solid rgba(255,255,255,.04); }
+  .yt-table tr:hover td { background: rgba(201,168,76,.04); }
+  .sess-pill {
+    background: rgba(201,168,76,.12); color: var(--gold);
+    border-radius: 4px; padding: 2px 7px; font-size: .75rem; white-space: nowrap;
+  }
+  .yt-table a { color: var(--muted); text-decoration: none; }
+  .yt-table a:hover { color: var(--gold); }
+
+  /* Misc */
+  .loading { text-align: center; color: var(--muted); padding: 40px; font-size: .9rem; }
+  .spinner {
+    width: 28px; height: 28px; border: 3px solid var(--border);
+    border-top-color: var(--gold); border-radius: 50%;
+    animation: spin .7s linear infinite; margin: 0 auto 12px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .last-updated { text-align: right; color: var(--muted); font-size: .75rem; margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<!-- Login -->
+<div id="login-overlay">
+  <div class="login-box">
+    <h1>The Hope 線上分部</h1>
+    <p>Dashboard &middot; Admin 登入</p>
+    <label>GAS 部署網址</label>
+    <input id="inp-url" type="url" placeholder="https://script.google.com/macros/s/…/exec">
+    <label>Dashboard Token</label>
+    <input id="inp-token" type="password" placeholder="管理密碼">
+    <button class="btn-primary" onclick="doLogin()">進入 Dashboard</button>
+    <div id="login-error"></div>
+  </div>
+</div>
+
+<!-- App -->
+<div id="app">
+  <header>
+    <div class="brand">The Hope 線上分部 <span>Dashboard</span></div>
+    <button class="btn-logout" onclick="doLogout()">登出</button>
+  </header>
+  <main>
+
+    <!-- GEO -->
+    <section>
+      <div class="section-title">🌏 地理分佈</div>
+      <div id="geo-loading" class="loading"><div class="spinner"></div>載入中…</div>
+      <div id="geo-content" style="display:none">
+        <div id="map"></div>
+        <div class="grid-2">
+          <div class="card"><div class="card-title">國家排行</div><ul class="rank-list" id="country-list"></ul></div>
+          <div class="card"><div class="card-title">城市排行</div><ul class="rank-list" id="city-list"></ul></div>
+        </div>
+        <div class="last-updated" id="geo-ts"></div>
+      </div>
+    </section>
+
+    <!-- GROWTH -->
+    <section>
+      <div class="section-title">📈 成長指標</div>
+      <div id="growth-loading" class="loading"><div class="spinner"></div>載入中…</div>
+      <div id="growth-content" style="display:none">
+        <div class="grid-3" style="margin-bottom:16px">
+          <div class="card stat-pill"><div class="num" id="sw">-</div><div class="label">統計週數</div></div>
+          <div class="card stat-pill"><div class="num" id="sa">-</div><div class="label">平均週出席</div></div>
+          <div class="card stat-pill"><div class="num" id="sb"></div><div class="label">出席趨勢</div></div>
+        </div>
+        <div class="grid-2">
+          <div class="card"><div class="card-title">週出席趨勢（近 12 週）</div><div class="chart-wrap"><canvas id="ca"></canvas></div></div>
+          <div class="card"><div class="card-title">每週新朋友人數</div><div class="chart-wrap"><canvas id="cn"></canvas></div></div>
+        </div>
+        <div class="last-updated" id="growth-ts"></div>
+      </div>
+    </section>
+
+    <!-- YOUTUBE -->
+    <section>
+      <div class="section-title">▶️ YouTube 主日直播</div>
+      <div id="yt-loading" class="loading"><div class="spinner"></div>載入中…</div>
+      <div id="yt-content" style="display:none">
+        <div class="card yt-scroll">
+          <table class="yt-table">
+            <thead><tr><th>日期</th><th>場次</th><th>標題</th><th>觀看</th><th>按讚</th><th>留言</th><th>同時在線</th></tr></thead>
+            <tbody id="yt-tbody"></tbody>
+          </table>
+        </div>
+        <div class="last-updated" id="yt-ts"></div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script>
+const CITY_COORDS = {
+  '台北':[25.033,121.565],'台北市':[25.033,121.565],'新北':[25.012,121.466],'新北市':[25.012,121.466],
+  '桃園':[24.993,121.301],'台中':[24.148,120.673],'台中市':[24.148,120.673],'台南':[22.999,120.227],
+  '高雄':[22.627,120.301],'高雄市':[22.627,120.301],'新竹':[24.803,120.971],'基隆':[25.128,121.739],
+  '花蓮':[23.991,121.601],'宜蘭':[24.754,121.754],'台東':[22.757,121.144],
+  'Taipei':[25.033,121.565],'Taichung':[24.148,120.673],'Kaohsiung':[22.627,120.301],'Tainan':[22.999,120.227],
+  '吉隆坡':[3.139,101.687],'Kuala Lumpur':[3.139,101.687],'KL':[3.139,101.687],
+  '新加坡':[1.352,103.820],'Singapore':[1.352,103.820],
+  '曼谷':[13.756,100.502],'Bangkok':[13.756,100.502],
+  '香港':[22.320,114.170],'Hong Kong':[22.320,114.170],
+  '北京':[39.904,116.407],'上海':[31.230,121.473],'廣州':[23.129,113.264],'深圳':[22.543,114.058],
+  '洛杉磯':[34.052,-118.244],'Los Angeles':[34.052,-118.244],'LA':[34.052,-118.244],
+  '紐約':[40.713,-74.006],'New York':[40.713,-74.006],'NYC':[40.713,-74.006],
+  '舊金山':[37.774,-122.419],'San Francisco':[37.774,-122.419],'SF':[37.774,-122.419],
+  '西雅圖':[47.606,-122.332],'Seattle':[47.606,-122.332],
+  '多倫多':[43.653,-79.383],'Toronto':[43.653,-79.383],
+  '溫哥華':[49.247,-123.117],'Vancouver':[49.247,-123.117],
+  '雪梨':[-33.868,151.209],'Sydney':[-33.868,151.209],
+  '墨爾本':[-37.814,144.963],'Melbourne':[-37.814,144.963],
+  '倫敦':[51.507,-0.128],'London':[51.507,-0.128],
+  '東京':[35.690,139.692],'Tokyo':[35.690,139.692],
+  '首爾':[37.566,126.978],'Seoul':[37.566,126.978],
+  '雅加達':[-6.208,106.846],'Jakarta':[-6.208,106.846],
+  '馬尼拉':[14.599,120.984],'Manila':[14.599,120.984],
+};
+const COUNTRY_COORDS = {
+  '台灣':[23.7,121.0],'Taiwan':[23.7,121.0],
+  '馬來西亞':[3.1,101.7],'Malaysia':[3.1,101.7],
+  '新加坡':[1.35,103.82],
+  '美國':[37.1,-95.7],'United States':[37.1,-95.7],'USA':[37.1,-95.7],
+  '加拿大':[56.1,-106.3],'Canada':[56.1,-106.3],
+  '澳洲':[-25.3,133.8],'Australia':[-25.3,133.8],
+  '日本':[36.2,138.3],'Japan':[36.2,138.3],
+  '英國':[55.4,-3.4],'United Kingdom':[55.4,-3.4],'UK':[55.4,-3.4],
+  '中國':[35.9,104.2],'China':[35.9,104.2],
+  '香港':[22.32,114.17],
+  '泰國':[15.9,100.9],'Thailand':[15.9,100.9],
+  '印尼':[-0.8,113.9],'Indonesia':[-0.8,113.9],
+  '菲律賓':[12.9,121.8],'Philippines':[12.9,121.8],
+  '越南':[14.1,108.3],'Vietnam':[14.1,108.3],
+  '韓國':[35.9,127.8],'South Korea':[35.9,127.8],
+};
+
+let GAS_URL='', DASH_TOKEN='';
+
+function doLogin(){
+  const u=document.getElementById('inp-url').value.trim();
+  const t=document.getElementById('inp-token').value.trim();
+  if(!u||!t){showErr('請填寫網址和 Token');return;}
+  GAS_URL=u; DASH_TOKEN=t;
+  localStorage.setItem('hd_url',u); localStorage.setItem('hd_tok',t);
+  startApp();
+}
+function doLogout(){localStorage.removeItem('hd_url');localStorage.removeItem('hd_tok');location.reload();}
+function showErr(m){const e=document.getElementById('login-error');e.textContent='⚠ '+m;e.style.display='block';}
+
+function startApp(){
+  document.getElementById('login-overlay').style.display='none';
+  document.getElementById('app').style.display='flex';
+  loadGeo(); loadGrowth(); loadYt();
+}
+
+function api(action){
+  return fetch(GAS_URL+'?action='+action+'&token='+encodeURIComponent(DASH_TOKEN)).then(r=>r.json());
+}
+
+/* ── GEO ── */
+let mapI=null;
+function loadGeo(){
+  api('geo').then(d=>{
+    if(d.error){showSec('geo',false,d.error);return;}
+    showSec('geo',true);
+    renderMap(d.cities,d.countries);
+    rankList('country-list',d.countries.slice(0,10),'country','count');
+    rankList('city-list',d.cities.slice(0,10).map(c=>({name:c.city+' ('+c.country+')',count:c.count})),'name','count');
+    document.getElementById('geo-ts').textContent='更新於 '+now();
+  }).catch(e=>showSec('geo',false,e.message));
+}
+function renderMap(cities,countries){
+  if(mapI){mapI.remove();}
+  mapI=L.map('map',{scrollWheelZoom:false}).setView([20,110],2);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{
+    attribution:'© OpenStreetMap © CARTO',subdomains:'abcd',maxZoom:19
+  }).addTo(mapI);
+  const maxC=Math.max(...countries.map(c=>c.count),1);
+  cities.forEach(c=>{
+    const co=CITY_COORDS[c.city]||CITY_COORDS[c.city.trim()]
+      ||(()=>{const k=Object.keys(CITY_COORDS).find(k=>k.toLowerCase()===c.city.toLowerCase());return k?CITY_COORDS[k]:null;})()
+      ||COUNTRY_COORDS[c.country]||COUNTRY_COORDS[c.country.trim()];
+    if(!co)return;
+    const r=6+Math.round((c.count/maxC)*14);
+    L.circleMarker(co,{radius:r,color:'#c9a84c',fillColor:'#c9a84c',fillOpacity:.55,weight:1.5})
+      .addTo(mapI).bindPopup('<b>'+c.city+'</b><br>'+c.country+'<br>'+c.count+' 人');
+  });
+}
+function rankList(id,items,nk,ck){
+  const ul=document.getElementById(id); ul.innerHTML='';
+  const mx=items.length?items[0][ck]:1;
+  items.forEach((it,i)=>{
+    const p=Math.round((it[ck]/mx)*100);
+    ul.innerHTML+=`<li><span class="rn">${i+1}</span><span class="nm">${it[nk]}</span>`+
+      `<div class="bw"><div class="bf" style="width:${p}%"></div></div>`+
+      `<span class="ct">${it[ck]} 人</span></li>`;
+  });
+}
+
+/* ── GROWTH ── */
+let cA=null,cN=null;
+function loadGrowth(){
+  api('growth').then(d=>{
+    if(d.error){showSec('growth',false,d.error);return;}
+    showSec('growth',true);
+    const tr=d.attendanceTrend||[], nr=d.newPeopleTrend||[];
+    document.getElementById('sw').textContent=tr.length;
+    document.getElementById('sa').textContent=tr.length?Math.round(tr.reduce((s,w)=>s+w.total,0)/tr.length):0;
+    document.getElementById('sb').innerHTML=d.alert
+      ?'<span class="alert-badge">⚠ 連續下滑</span>'
+      :'<span class="ok-badge">✓ 正常</span>';
+    const lb=tr.map(w=>w.week.replace(/^\d{4}-/,''));
+    if(cA)cA.destroy();
+    cA=new Chart(document.getElementById('ca'),{type:'line',data:{labels:lb,datasets:[
+      {label:'合計',data:tr.map(w=>w.total),borderColor:'#c9a84c',backgroundColor:'rgba(201,168,76,.1)',tension:.35,borderWidth:2.5,fill:true,pointRadius:3},
+      {label:'9:30',data:tr.map(w=>w.s930),borderColor:'#7eb8e0',backgroundColor:'transparent',tension:.35,borderWidth:1.5,pointRadius:2},
+      {label:'11:30',data:tr.map(w=>w.s1130),borderColor:'#7ee0b8',backgroundColor:'transparent',tension:.35,borderWidth:1.5,pointRadius:2},
+      {label:'2PM',data:tr.map(w=>w.s200),borderColor:'#e09a7e',backgroundColor:'transparent',tension:.35,borderWidth:1.5,pointRadius:2},
+    ]},options:cOpt()});
+    if(cN)cN.destroy();
+    cN=new Chart(document.getElementById('cn'),{type:'bar',data:{labels:nr.map(w=>w.week.replace(/^\d{4}-/,'')),datasets:[
+      {label:'新朋友',data:nr.map(w=>w.count),backgroundColor:'rgba(201,168,76,.6)',borderRadius:4}
+    ]},options:cOpt()});
+    document.getElementById('growth-ts').textContent='更新於 '+now();
+  }).catch(e=>showSec('growth',false,e.message));
+}
+function cOpt(){return{responsive:true,maintainAspectRatio:false,
+  plugins:{legend:{labels:{color:'#8888aa',font:{size:11},boxWidth:12}}},
+  scales:{x:{ticks:{color:'#8888aa',font:{size:10},maxRotation:45},grid:{color:'rgba(255,255,255,.05)'}},
+          y:{ticks:{color:'#8888aa',font:{size:10}},grid:{color:'rgba(255,255,255,.05)'},beginAtZero:true}}};}
+
+/* ── YOUTUBE ── */
+function loadYt(){
+  api('youtube').then(d=>{
+    if(d.error){showSec('yt',false,d.error);return;}
+    showSec('yt',true);
+    const rows=d.rows||[], tb=document.getElementById('yt-tbody');
+    tb.innerHTML='';
+    if(!rows.length){
+      tb.innerHTML='<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:24px">尚無資料，請先執行 syncYoutubeData()</td></tr>';
+    } else {
+      rows.forEach(r=>{
+        const vid=r['影片ID']||'';
+        tb.innerHTML+=`<tr>
+          <td>${fmtDate(r['日期'])}</td>
+          <td><span class="sess-pill">${r['場次']||'-'}</span></td>
+          <td><a href="https://youtu.be/${vid}" target="_blank">${trunc(r['標題']||'-',36)}</a></td>
+          <td>${fmtN(r['觀看次數'])}</td><td>${fmtN(r['按讚數'])}</td>
+          <td>${fmtN(r['留言數'])}</td><td>${r['最高同時在線']||'-'}</td>
+        </tr>`;
+      });
+    }
+    document.getElementById('yt-ts').textContent='更新於 '+now();
+  }).catch(e=>showSec('yt',false,e.message));
+}
+
+/* ── Helpers ── */
+function showSec(k,ok,err){
+  const ld=document.getElementById(k+'-loading');
+  const ct=document.getElementById(k+'-content');
+  if(ok){ld.style.display='none';ct.style.display='';}
+  else{ld.innerHTML='<div style="color:var(--danger);padding:20px">⚠ '+(err||'錯誤')+'</div>';ld.style.display='';}
+}
+function now(){return new Date().toLocaleString('zh-TW',{hour12:false});}
+function fmtN(n){return(n==null||n==='')?'-':Number(n).toLocaleString();}
+function fmtDate(d){if(!d)return'-';return String(d).substring(0,10);}
+function trunc(s,n){return s.length>n?s.substring(0,n)+'…':s;}
+
+/* ── Init ── */
+(function(){
+  const u=localStorage.getItem('hd_url'), t=localStorage.getItem('hd_tok');
+  if(u&&t){
+    document.getElementById('inp-url').value=u;
+    document.getElementById('inp-token').value=t;
+    GAS_URL=u; DASH_TOKEN=t; startApp();
+  }
+})();
+</script>
+</body>
+</html>
