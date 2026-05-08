@@ -202,12 +202,13 @@ function getYoutubeData_() {
 
 // ============================================================
 // syncYoutubeData() — 每週日 22:00 自動觸發
+// ⚠️  需在 GAS 編輯器啟用「YouTube Data API v3」進階服務
+//     （左側選單 Services → YouTube Data API v3 → Add）
 // ============================================================
 function syncYoutubeData() {
-  var apiKey    = DASH_CFG.ytApiKey;
-  var channelId = DASH_CFG.channelId;
-  if (!apiKey || !channelId) {
-    Logger.log('缺少 YT_API_KEY 或 YT_CHANNEL_ID');
+  var apiKey = DASH_CFG.ytApiKey;
+  if (!apiKey) {
+    Logger.log('缺少 YT_API_KEY');
     return;
   }
 
@@ -216,72 +217,64 @@ function syncYoutubeData() {
   var dateStr = Utilities.formatDate(sunday, 'Asia/Taipei', 'yyyy-MM-dd');
   Logger.log('同步週日：' + dateStr);
 
-  // 使用台北時間（+08:00）建構 ISO 字串，確保時區正確
   var dayStartUTC = new Date(dateStr + 'T00:00:00+08:00');
   var dayEndUTC   = new Date(dateStr + 'T23:59:59+08:00');
 
-  // 不加 q 參數，搜尋該週日頻道所有完播直播
-  var buildSearchUrl = function(after, before) {
-    return 'https://www.googleapis.com/youtube/v3/search'
-      + '?part=id,snippet'
-      + '&channelId=' + encodeURIComponent(channelId)
-      + '&type=video'
-      + '&eventType=completed'
-      + '&publishedAfter='  + after.toISOString()
-      + '&publishedBefore=' + before.toISOString()
-      + '&maxResults=20'
-      + '&order=date'
-      + '&key=' + apiKey;
-  };
-
-  var searchData = JSON.parse(
-    UrlFetchApp.fetch(buildSearchUrl(dayStartUTC, dayEndUTC), { muteHttpExceptions: true }).getContentText()
-  );
-  Logger.log('第一次搜尋：' + (searchData.items ? searchData.items.length + ' 筆' : '錯誤 ' + (searchData.error ? searchData.error.message : '')));
-
-  // 若無結果，拓寬 ±24 小時再試一次
-  if (!searchData.items || searchData.items.length === 0) {
-    Logger.log('無結果，拓寬搜尋範圍 ±24h...');
-    var widerStart = new Date(dayStartUTC.getTime() - 24 * 60 * 60 * 1000);
-    var widerEnd   = new Date(dayEndUTC.getTime()   + 24 * 60 * 60 * 1000);
-    searchData = JSON.parse(
-      UrlFetchApp.fetch(buildSearchUrl(widerStart, widerEnd), { muteHttpExceptions: true }).getContentText()
-    );
-    Logger.log('拓寬搜尋：' + (searchData.items ? searchData.items.length + ' 筆' : '仍無結果'));
-  }
-
-  if (!searchData.items || searchData.items.length === 0) {
-    Logger.log('找不到任何直播，請確認頻道設定或該週是否有主日');
+  // ── Step 1：用 YouTube 進階服務（OAuth）取得不公開直播 ──
+  var broadcasts;
+  try {
+    broadcasts = YouTube.LiveBroadcasts.list('id,snippet,status', {
+      broadcastStatus: 'completed',
+      broadcastType:   'all',
+      maxResults:      50
+    });
+  } catch (e) {
+    Logger.log('YouTube 進階服務錯誤：' + e.message);
+    Logger.log('→ 請在 GAS 編輯器左側 Services 加入 YouTube Data API v3');
     return;
   }
 
-  // 印出所有找到的影片標題（方便確認命名格式）
-  searchData.items.forEach(function(item) {
-    Logger.log('找到：' + item.snippet.title + ' (' + item.id.videoId + ')');
+  Logger.log('取得已完成直播：' + (broadcasts.items ? broadcasts.items.length : 0) + ' 筆');
+  if (!broadcasts.items || broadcasts.items.length === 0) {
+    Logger.log('無已完成直播');
+    return;
+  }
+
+  // ── Step 2：過濾當週日的主日直播 ──
+  var validItems = broadcasts.items.filter(function(item) {
+    var t         = item.snippet.title;
+    var startTime = item.snippet.actualStartTime;
+    if (!startTime) return false;
+
+    var startDate  = new Date(startTime);
+    var isInRange  = startDate >= dayStartUTC && startDate <= dayEndUTC;
+    var isSunday   = (t.indexOf('主日') > -1 || t.indexOf('HOPE') > -1);
+    var isNotQ2Q   = t.indexOf('Q2Q') === -1 && t.indexOf('Q to Q') === -1;
+
+    Logger.log((isInRange && isSunday && isNotQ2Q ? '✓' : '✗') + ' ' + t + ' | ' + startTime);
+    return isInRange && isSunday && isNotQ2Q;
   });
 
-  // 過濾：標題含「主日」或「Sunday」，排除 Q2Q / Q to Q
-  var validItems = searchData.items.filter(function(item) {
-    var t = item.snippet.title;
-    return (t.indexOf('主日') > -1 || t.indexOf('Sunday') > -1 || t.indexOf('SUNDAY') > -1)
-           && t.indexOf('Q2Q') === -1
-           && t.indexOf('Q to Q') === -1;
-  });
-
-  Logger.log('有效主日影片：' + validItems.length + ' 筆');
+  Logger.log('有效主日直播：' + validItems.length + ' 筆');
   if (validItems.length === 0) {
-    Logger.log('標題過濾後無影片，以上列出的標題請確認是否含「主日」或「Sunday」');
+    Logger.log('該週日無符合的主日直播（確認標題含「主日」或「HOPE」）');
     return;
   }
 
-  var videoIds = validItems.map(function(i) { return i.id.videoId; }).join(',');
+  // ── Step 3：用 API Key 取得統計數據（videos.list 可抓不公開影片 ID）──
+  var videoIds = validItems.map(function(i) { return i.id; }).join(',');
   var videoUrl = 'https://www.googleapis.com/youtube/v3/videos'
     + '?part=snippet,statistics,liveStreamingDetails'
     + '&id=' + videoIds
     + '&key=' + apiKey;
 
   var videoData = JSON.parse(UrlFetchApp.fetch(videoUrl, { muteHttpExceptions: true }).getContentText());
+  if (!videoData.items || videoData.items.length === 0) {
+    Logger.log('videos.list 無回傳（影片 ID：' + videoIds + '）');
+    return;
+  }
 
+  // ── Step 4：寫入 Sheet ──
   var ss  = SpreadsheetApp.openById(DASH_CFG.sheetId);
   var tab = ss.getSheetByName(DASH_CFG.tabYoutube);
   if (!tab) {
@@ -295,9 +288,8 @@ function syncYoutubeData() {
   var written  = 0;
 
   videoData.items.forEach(function(video) {
-    // 避免重複寫入
     if (tab.createTextFinder(video.id).findAll().length > 0) {
-      Logger.log('已存在，跳過：' + video.id);
+      Logger.log('已存在，跳過：' + video.snippet.title);
       return;
     }
     var stats   = video.statistics || {};
@@ -315,6 +307,7 @@ function syncYoutubeData() {
       live.concurrentViewers || '',
       syncTime
     ]);
+    Logger.log('寫入：' + video.snippet.title);
     written++;
   });
 
