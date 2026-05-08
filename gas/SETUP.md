@@ -17,7 +17,7 @@ GAS → 專案設定 → 指令碼屬性，新增以下四組：
 
 | 屬性名稱 | 值 |
 |---|---|
-| `YT_API_KEY` | `AIzaSyDXKof8bYjsVMYcD_e-gIAD6fSccIQMLYE` |
+| `YT_API_KEY` | `（在 Google Cloud Console 取得你的 API Key，貼在這裡）` |
 | `YT_CHANNEL_ID` | The Hope YouTube 頻道 ID（UC 開頭，從頻道網址取得） |
 | `DASHBOARD_TOKEN` | 自訂一組管理密碼（例如 `hope2026admin`） |
 | `MEMBER_SHEET_ID` | 會眾 Google Sheet 的 ID（從網址取得） |
