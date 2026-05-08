@@ -211,35 +211,68 @@ function syncYoutubeData() {
     return;
   }
 
-  var now      = new Date();
-  var sunday   = getSundayTW_(now);
-  var dayStart = new Date(sunday.getFullYear(), sunday.getMonth(), sunday.getDate(), 0,  0,  0);
-  var dayEnd   = new Date(sunday.getFullYear(), sunday.getMonth(), sunday.getDate(), 23, 59, 59);
+  var now     = new Date();
+  var sunday  = getSundayTW_(now);
+  var dateStr = Utilities.formatDate(sunday, 'Asia/Taipei', 'yyyy-MM-dd');
+  Logger.log('同步週日：' + dateStr);
 
-  var searchUrl = 'https://www.googleapis.com/youtube/v3/search'
-    + '?part=id,snippet'
-    + '&channelId=' + encodeURIComponent(channelId)
-    + '&type=video'
-    + '&eventType=completed'
-    + '&q=' + encodeURIComponent('加入 HOPE 主日')
-    + '&publishedAfter='  + dayStart.toISOString()
-    + '&publishedBefore=' + dayEnd.toISOString()
-    + '&maxResults=10'
-    + '&order=date'
-    + '&key=' + apiKey;
+  // 使用台北時間（+08:00）建構 ISO 字串，確保時區正確
+  var dayStartUTC = new Date(dateStr + 'T00:00:00+08:00');
+  var dayEndUTC   = new Date(dateStr + 'T23:59:59+08:00');
 
-  var searchData = JSON.parse(UrlFetchApp.fetch(searchUrl, { muteHttpExceptions: true }).getContentText());
+  // 不加 q 參數，搜尋該週日頻道所有完播直播
+  var buildSearchUrl = function(after, before) {
+    return 'https://www.googleapis.com/youtube/v3/search'
+      + '?part=id,snippet'
+      + '&channelId=' + encodeURIComponent(channelId)
+      + '&type=video'
+      + '&eventType=completed'
+      + '&publishedAfter='  + after.toISOString()
+      + '&publishedBefore=' + before.toISOString()
+      + '&maxResults=20'
+      + '&order=date'
+      + '&key=' + apiKey;
+  };
+
+  var searchData = JSON.parse(
+    UrlFetchApp.fetch(buildSearchUrl(dayStartUTC, dayEndUTC), { muteHttpExceptions: true }).getContentText()
+  );
+  Logger.log('第一次搜尋：' + (searchData.items ? searchData.items.length + ' 筆' : '錯誤 ' + (searchData.error ? searchData.error.message : '')));
+
+  // 若無結果，拓寬 ±24 小時再試一次
   if (!searchData.items || searchData.items.length === 0) {
-    Logger.log('今日無符合直播，請確認 YT_CHANNEL_ID');
+    Logger.log('無結果，拓寬搜尋範圍 ±24h...');
+    var widerStart = new Date(dayStartUTC.getTime() - 24 * 60 * 60 * 1000);
+    var widerEnd   = new Date(dayEndUTC.getTime()   + 24 * 60 * 60 * 1000);
+    searchData = JSON.parse(
+      UrlFetchApp.fetch(buildSearchUrl(widerStart, widerEnd), { muteHttpExceptions: true }).getContentText()
+    );
+    Logger.log('拓寬搜尋：' + (searchData.items ? searchData.items.length + ' 筆' : '仍無結果'));
+  }
+
+  if (!searchData.items || searchData.items.length === 0) {
+    Logger.log('找不到任何直播，請確認頻道設定或該週是否有主日');
     return;
   }
 
-  var validItems = searchData.items.filter(function(item) {
-    var t = item.snippet.title;
-    return t.indexOf('加入 HOPE 主日') > -1 && t.indexOf('Q2Q') === -1 && t.indexOf('Q to Q') === -1;
+  // 印出所有找到的影片標題（方便確認命名格式）
+  searchData.items.forEach(function(item) {
+    Logger.log('找到：' + item.snippet.title + ' (' + item.id.videoId + ')');
   });
 
-  if (validItems.length === 0) { Logger.log('所有結果被過濾，確認命名規則'); return; }
+  // 過濾：標題含「主日」或「Sunday」，排除 Q2Q / Q to Q
+  var validItems = searchData.items.filter(function(item) {
+    var t = item.snippet.title;
+    return (t.indexOf('主日') > -1 || t.indexOf('Sunday') > -1 || t.indexOf('SUNDAY') > -1)
+           && t.indexOf('Q2Q') === -1
+           && t.indexOf('Q to Q') === -1;
+  });
+
+  Logger.log('有效主日影片：' + validItems.length + ' 筆');
+  if (validItems.length === 0) {
+    Logger.log('標題過濾後無影片，以上列出的標題請確認是否含「主日」或「Sunday」');
+    return;
+  }
 
   var videoIds = validItems.map(function(i) { return i.id.videoId; }).join(',');
   var videoUrl = 'https://www.googleapis.com/youtube/v3/videos'
@@ -258,13 +291,15 @@ function syncYoutubeData() {
     tab.getRange(1, 1, 1, header.length).setFontWeight('bold');
   }
 
-  var dateStr  = Utilities.formatDate(sunday, 'Asia/Taipei', 'yyyy-MM-dd');
   var syncTime = new Date();
+  var written  = 0;
 
   videoData.items.forEach(function(video) {
     // 避免重複寫入
-    if (tab.createTextFinder(video.id).findAll().length > 0) return;
-
+    if (tab.createTextFinder(video.id).findAll().length > 0) {
+      Logger.log('已存在，跳過：' + video.id);
+      return;
+    }
     var stats   = video.statistics || {};
     var live    = video.liveStreamingDetails || {};
     var session = detectYtSession_(video.snippet.title);
@@ -274,15 +309,16 @@ function syncYoutubeData() {
       session,
       video.id,
       video.snippet.title,
-      stats.viewCount    || 0,
-      stats.likeCount    || 0,
-      stats.commentCount || 0,
+      parseInt(stats.viewCount)    || 0,
+      parseInt(stats.likeCount)    || 0,
+      parseInt(stats.commentCount) || 0,
       live.concurrentViewers || '',
       syncTime
     ]);
+    written++;
   });
 
-  Logger.log('syncYoutubeData 完成');
+  Logger.log('syncYoutubeData 完成，新增 ' + written + ' 筆');
 }
 
 // ── 工具函式 ───────────────────────────────────────────────
