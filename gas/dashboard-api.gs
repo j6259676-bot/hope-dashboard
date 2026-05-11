@@ -418,6 +418,111 @@ function syncYoutubeData() {
 }
 
 // ============================================================
+// syncUnlistedBroadcasts(optDateStr) — 補抓不公開直播
+// 當 syncYoutubeData 錯過（影片已轉不公開）時使用
+// 使用 YouTube Advanced Service OAuth（需啟用：服務 > YouTube Data API）
+// 用法：syncUnlistedBroadcasts()          ← 本週日
+//       syncUnlistedBroadcasts('2026-05-11') ← 指定日期
+// ============================================================
+function syncUnlistedBroadcasts(optDateStr) {
+  var sunday  = optDateStr ? new Date(optDateStr + 'T12:00:00+08:00') : getSundayTW_(new Date());
+  var dateStr = Utilities.formatDate(sunday, 'Asia/Taipei', 'yyyy-MM-dd');
+  Logger.log('補抓週日直播：' + dateStr);
+
+  // 台北時間當天 06:00–23:59
+  var startTime = new Date(dateStr + 'T06:00:00+08:00');
+  var endTime   = new Date(dateStr + 'T23:59:59+08:00');
+
+  // YouTube OAuth 列出所有已結束的直播（含不公開）
+  var response;
+  try {
+    response = YouTube.LiveBroadcasts.list('id,snippet,status', {
+      mine: true,
+      broadcastStatus: 'complete',
+      maxResults: 50,
+    });
+  } catch (e) {
+    Logger.log('YouTube.LiveBroadcasts.list 失敗：' + e.message);
+    Logger.log('請確認已啟用進階服務「YouTube Data API」（服務 > YouTube Data API）');
+    return;
+  }
+
+  // 過濾：這個週日時段內的主日直播
+  var items = (response.items || []).filter(function (b) {
+    var scheduled = new Date(b.snippet.scheduledStartTime);
+    return scheduled >= startTime && scheduled <= endTime;
+  }).filter(function (b) {
+    var t = b.snippet.title;
+    return (t.indexOf('主日') > -1 || t.indexOf('HOPE') > -1)
+           && t.indexOf('Q2Q') === -1
+           && t.indexOf('Q to Q') === -1;
+  });
+
+  Logger.log('找到主日直播：' + items.length + ' 筆');
+  if (items.length === 0) {
+    Logger.log('沒有符合的直播（確認 scheduledStartTime 在 ' + dateStr + ' 06:00–23:59 台北時間）');
+    return;
+  }
+
+  // 用 API Key 取得統計數據
+  var apiKey   = DASH_CFG.ytApiKey;
+  var videoIds = items.map(function (b) { return b.id; }).join(',');
+  var videoUrl = 'https://www.googleapis.com/youtube/v3/videos'
+    + '?part=snippet,statistics'
+    + '&id=' + videoIds
+    + '&key=' + apiKey;
+
+  var videoData = JSON.parse(
+    UrlFetchApp.fetch(videoUrl, { muteHttpExceptions: true }).getContentText()
+  );
+  if (!videoData.items || !videoData.items.length) {
+    Logger.log('videos.list 無回傳（ID: ' + videoIds + '）');
+    return;
+  }
+
+  // 建立或 migrate 表單
+  var ss  = SpreadsheetApp.openById(DASH_CFG.sheetId);
+  var tab = ss.getSheetByName(DASH_CFG.tabYoutube);
+  if (!tab) {
+    tab = ss.insertSheet(DASH_CFG.tabYoutube);
+    tab.appendRow(YT_HEADER_V2);
+    tab.getRange(1, 1, 1, YT_HEADER_V2.length).setFontWeight('bold');
+  } else {
+    migrateYtHeader_(tab);
+  }
+
+  // Dedup
+  var existingRows = tab.getDataRange().getValues();
+  var existingIds  = {};
+  for (var i = 1; i < existingRows.length; i++) {
+    var vid = (existingRows[i][DASH_CFG.ytVideoId] || '').toString().trim();
+    if (vid) existingIds[vid] = true;
+  }
+
+  var syncTime = new Date();
+  var written  = 0;
+  videoData.items.forEach(function (video) {
+    if (existingIds[video.id]) {
+      Logger.log('已存在，跳過：' + video.snippet.title);
+      return;
+    }
+    var stats   = video.statistics || {};
+    var session = detectYtSession_(video.snippet.title);
+    tab.appendRow([
+      dateStr, session, video.id, video.snippet.title,
+      parseInt(stats.viewCount)    || 0,
+      parseInt(stats.likeCount)    || 0,
+      parseInt(stats.commentCount) || 0,
+      '', '', '', '', '', '',
+      syncTime,
+    ]);
+    Logger.log('寫入：' + video.snippet.title);
+    written++;
+  });
+  Logger.log('syncUnlistedBroadcasts 完成，新增 ' + written + ' 筆');
+}
+
+// ============================================================
 // updateYoutubeAnalytics() — 每週二 20:00 觸發
 // 回補 Analytics 欄位（averageConcurrentViewers, peakConcurrentViewers,
 // averageViewDuration, averageViewPercentage, estimatedMinutesWatched,
@@ -428,9 +533,14 @@ function syncYoutubeData() {
 function updateYoutubeAnalytics() {
   var ss  = SpreadsheetApp.openById(DASH_CFG.sheetId);
   var tab = ss.getSheetByName(DASH_CFG.tabYoutube);
-  if (!tab || tab.getLastColumn() < 14) {
-    Logger.log('YouTube數據 tab 不存在或尚未 migrate，請先執行 syncYoutubeData()');
-    return;
+  if (!tab) {
+    tab = ss.insertSheet(DASH_CFG.tabYoutube);
+    tab.appendRow(YT_HEADER_V2);
+    tab.getRange(1, 1, 1, YT_HEADER_V2.length).setFontWeight('bold');
+    Logger.log('YouTube數據 tab 已建立（v2）');
+  } else if (tab.getLastColumn() < 14) {
+    migrateYtHeader_(tab);
+    Logger.log('YouTube數據 tab 已 migrate 至 v2');
   }
 
   var data    = tab.getDataRange().getValues();
