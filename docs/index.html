@@ -216,7 +216,7 @@ section { margin-bottom: 48px; }
   font-size: 10px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
   border-bottom: 1px solid var(--border); white-space: nowrap;
 }
-.yt-tbl td { padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,.04); }
+.yt-tbl td { padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,.04); white-space: nowrap; }
 .yt-tbl tr:hover td { background: rgba(255,204,50,.04); }
 .sess-tag {
   background: rgba(255,204,50,.12); color: var(--yellow);
@@ -233,6 +233,15 @@ section { margin-bottom: 48px; }
 .yt-note strong {
   display: block; color: var(--text); margin-bottom: 6px;
   font-family: var(--font-en); font-size: .8rem; letter-spacing: .04em;
+}
+.num-hi { color: var(--yellow); font-family: var(--font-en); font-weight: 600; }
+.pct-bar-wrap { display:inline-flex; align-items:center; gap:6px; }
+.pct-bar { width:44px; background:rgba(255,255,255,.08); border-radius:3px; height:4px; display:inline-block; }
+.pct-fill { height:4px; border-radius:3px; background:var(--sand); display:block; }
+.tag-pending {
+  background:rgba(255,255,255,.08); color:var(--muted);
+  border-radius:4px; padding:2px 7px;
+  font-family:var(--font-en); font-size:.68rem; letter-spacing:.03em;
 }
 
 /* ── LOADING / MISC ── */
@@ -319,17 +328,54 @@ section { margin-bottom: 48px; }
     <section>
       <div class="section-header">
         <span class="section-title">YouTube 主日直播</span>
-        <span class="section-sub">每週主日後自動同步，最新 36 筆</span>
+        <span class="section-sub">週日基本數據同步 · 週二 Analytics 回補</span>
       </div>
       <div id="yt-loading" class="loading"><div class="spinner"></div>載入中…</div>
       <div id="yt-content" style="display:none">
         <div id="yt-note-area"></div>
+
+        <!-- Analytics 摘要 stat cards（有 Analytics 資料才顯示）-->
+        <div class="grid-3" id="yt-stats" style="display:none; margin-bottom:16px">
+          <div class="card stat-card">
+            <div class="stat-num" id="yt-avg-concur">—</div>
+            <div class="stat-label">平均同時在線（近期均值）</div>
+          </div>
+          <div class="card stat-card">
+            <div class="stat-num" id="yt-avg-dur">—</div>
+            <div class="stat-label">平均觀看時長</div>
+          </div>
+          <div class="card stat-card">
+            <div class="stat-num" id="yt-avg-pct">—</div>
+            <div class="stat-label">平均觀看完成率</div>
+          </div>
+        </div>
+
+        <!-- 影片列表 -->
         <div class="card tbl-scroll" id="yt-table-wrap" style="display:none">
           <table class="yt-tbl">
-            <thead><tr><th>日期</th><th>場次</th><th>標題</th><th>觀看</th><th>按讚</th><th>留言</th><th>同時在線</th></tr></thead>
+            <thead><tr>
+              <th>日期</th><th>場次</th><th>標題</th>
+              <th>觀看次數</th><th>平均在線</th><th>峰值在線</th>
+              <th>觀看時長</th><th>觀看%</th><th>聊天訊息</th><th>按讚</th>
+            </tr></thead>
             <tbody id="yt-tbody"></tbody>
           </table>
         </div>
+
+        <!-- YouTube 觀眾地區分佈 -->
+        <div class="card" id="yt-geo-wrap" style="display:none; margin-top:16px">
+          <div class="card-title">
+            YouTube 觀眾地區分佈
+            <span style="font-weight:400; margin-left:8px; color:var(--muted); font-size:.75rem; text-transform:none; letter-spacing:0">
+              — 直播累計觀看，ISO 國家碼 · 可評估潛力開拓地區
+            </span>
+          </div>
+          <div class="grid-2">
+            <ul class="rank-list" id="yt-geo-list-a"></ul>
+            <ul class="rank-list" id="yt-geo-list-b"></ul>
+          </div>
+        </div>
+
         <div class="last-ts" id="yt-ts"></div>
       </div>
     </section>
@@ -398,7 +444,7 @@ function showErr(m){const e=document.getElementById('login-error');e.textContent
 function startApp(){
   document.getElementById('login-overlay').style.display='none';
   document.getElementById('app').style.display='flex';
-  loadGeo(); loadGrowth(); loadYt();
+  loadGeo(); loadGrowth(); loadYt(); loadYtGeo();
 }
 
 function api(action){
@@ -477,32 +523,64 @@ function loadGrowth(){
   }).catch(e=>showSec('growth',false,e.message));
 }
 
+/* ── ISO 國家碼對照 ── */
+const ISO={
+  TW:'台灣',US:'美國',MY:'馬來西亞',SG:'新加坡',HK:'香港',
+  AU:'澳洲',CA:'加拿大',GB:'英國',NZ:'紐西蘭',JP:'日本',
+  KR:'韓國',TH:'泰國',ID:'印尼',PH:'菲律賓',VN:'越南',
+  CN:'中國',DE:'德國',FR:'法國',NL:'荷蘭',SE:'瑞典',
+  BR:'巴西',ZA:'南非',IN:'印度',MX:'墨西哥',UA:'烏克蘭',
+};
+
 /* ── YOUTUBE ── */
 function loadYt(){
   api('youtube').then(d=>{
     if(d.error){showSec('yt',false,d.error);return;}
     showSec('yt',true);
-    const rows=d.rows||[], note=d.note||'';
+    const rows=d.rows||[], note=d.note||'', stats=d.stats||null;
     const noteArea=document.getElementById('yt-note-area');
     const tblWrap=document.getElementById('yt-table-wrap');
     const tb=document.getElementById('yt-tbody');
 
+    // stat cards
+    if(stats){
+      document.getElementById('yt-stats').style.display='';
+      document.getElementById('yt-avg-concur').textContent=
+        stats.avgConcurrent!=null?fmtN(stats.avgConcurrent):'—';
+      document.getElementById('yt-avg-dur').textContent=
+        stats.avgDuration!=null?fmtDur(stats.avgDuration):'—';
+      document.getElementById('yt-avg-pct').textContent=
+        stats.avgPercent!=null?(stats.avgPercent+'%'):'—';
+    }
+
     if(!rows.length){
       tblWrap.style.display='none';
       noteArea.innerHTML=`<div class="yt-note"><strong>尚無 YouTube 數據</strong>`+
-        (note?note:'請在 GAS 編輯器手動執行一次 syncYoutubeData()，或等週日 22:00 自動觸發。')+`</div>`;
+        (note||'請在 GAS 編輯器手動執行一次 syncYoutubeData()。')+`</div>`;
     } else {
       noteArea.innerHTML='';
       tblWrap.style.display='';
       tb.innerHTML='';
       rows.forEach(r=>{
         const vid=r['影片ID']||'';
+        const avg=r['平均同時在線'];
+        const pct=r['平均觀看%'];
+        const hasPct=pct!==''&&pct!=null&&!isNaN(Number(pct));
+        const pctBar=hasPct
+          ?`<div class="pct-bar-wrap"><div class="pct-bar"><span class="pct-fill" style="width:${Math.min(Number(pct),100)}%"></span></div>${Number(pct).toFixed(1)}%</div>`
+          :'<span class="tag-pending">待更新</span>';
+        const avgCell=(avg!==''&&avg!=null)?`<span class="num-hi">${fmtN(avg)}</span>`:'<span class="tag-pending">待更新</span>';
         tb.innerHTML+=`<tr>
           <td>${fmtD(r['日期'])}</td>
           <td><span class="sess-tag">${r['場次']||'—'}</span></td>
-          <td><a href="https://youtu.be/${vid}" target="_blank">${trunc(r['標題']||'—',40)}</a></td>
-          <td>${fmtN(r['觀看次數'])}</td><td>${fmtN(r['按讚數'])}</td>
-          <td>${fmtN(r['留言數'])}</td><td>${r['最高同時在線']||'—'}</td>
+          <td><a href="https://youtu.be/${vid}" target="_blank">${trunc(r['標題']||'—',36)}</a></td>
+          <td>${fmtN(r['觀看次數'])}</td>
+          <td>${avgCell}</td>
+          <td>${fmtN(r['峰值同時在線'])}</td>
+          <td>${r['平均觀看時長(秒)']!==''&&r['平均觀看時長(秒)']!=null?fmtDur(r['平均觀看時長(秒)']):'<span class="tag-pending">待更新</span>'}</td>
+          <td>${pctBar}</td>
+          <td>${fmtN(r['聊天訊息'])}</td>
+          <td>${fmtN(r['按讚數'])}</td>
         </tr>`;
       });
     }
@@ -510,7 +588,41 @@ function loadYt(){
   }).catch(e=>showSec('yt',false,e.message));
 }
 
+/* ── YOUTUBE GEO ── */
+function loadYtGeo(){
+  api('youtube-geo').then(d=>{
+    if(d.error||!d.countries||!d.countries.length) return;
+    const wrap=document.getElementById('yt-geo-wrap');
+    wrap.style.display='';
+    const items=d.countries;
+    const mx=items[0].views||1;
+    const half=Math.ceil(items.length/2);
+    const renderList=(id,arr)=>{
+      const ul=document.getElementById(id); ul.innerHTML='';
+      arr.forEach((it,i)=>{
+        const name=ISO[it.country]||it.country;
+        const p=Math.round((it.views/mx)*100);
+        const dur=it.avgDuration?` · ${fmtDur(it.avgDuration)}`:'';
+        ul.innerHTML+=`<li>
+          <span class="rn">${i+1}</span>
+          <span class="nm"><b style="color:var(--yellow);font-family:var(--font-en);font-size:.72rem">${it.country}</b> ${name}</span>
+          <div class="bw"><div class="bf" style="width:${p}%"></div></div>
+          <span class="ct">${fmtN(it.views)} 觀看${dur}</span>
+        </li>`;
+      });
+    };
+    renderList('yt-geo-list-a', items.slice(0, half));
+    renderList('yt-geo-list-b', items.slice(half));
+  }).catch(()=>{}); // 無地區數據時靜默略過
+}
+
 /* ── Helpers ── */
+function fmtDur(sec){
+  if(sec===''||sec==null||isNaN(Number(sec)))return'—';
+  const s=Math.round(Number(sec));
+  const m=Math.floor(s/60), r=s%60;
+  return m+'分'+String(r).padStart(2,'0')+'秒';
+}
 function showSec(k,ok,err){
   document.getElementById(k+'-loading').style.display='none';
   if(ok){document.getElementById(k+'-content').style.display='';}
